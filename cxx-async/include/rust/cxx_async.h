@@ -9,8 +9,7 @@
 
 // cxx-async/include/rust/cxx_async.h
 
-#ifndef RUST_CXX_ASYNC_H
-#define RUST_CXX_ASYNC_H
+#pragma once
 
 #if __has_include(<coroutine>)
 #include <coroutine>
@@ -26,6 +25,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <iostream>
 #include <mutex>
 #include <new>
 #include <stdexcept>
@@ -136,7 +136,7 @@
             __VA_ARGS__)> {                                                 \
     typedef type YieldResult;                                               \
     typedef final_result_type FinalResult;                                  \
-    static const auto vtable() {                                            \
+    static auto vtable() {                                                  \
       return CXXASYNC_CONCAT_3(                                             \
           cxxasync_, CXXASYNC_JOIN_DOLLAR(__VA_ARGS__), _vtable());         \
     }                                                                       \
@@ -190,7 +190,7 @@ struct RustExeclet;
 
 template <typename Future>
 struct Vtable {
-  RustChannel<Future> (*channel)(RustExeclet* execlet);
+  void (*channel)(RustChannel<Future>* out_shot, RustExeclet* execlet);
   uint32_t (*sender_send)(
       RustSender<Future>& self,
       uint32_t status,
@@ -727,14 +727,19 @@ class RustPromiseBase {
   RustPromiseBase& operator=(const RustPromiseBase&) = delete;
 
  protected:
-  Channel m_channel;
+  std::unique_ptr<char[]> m_channel_data;
+  Channel* m_channel;
 
  public:
   RustPromiseBase()
-      : m_execlet(), m_channel(Future::vtable()->channel(m_execlet.raw())) {}
+      : m_execlet(),
+        m_channel_data(new(std::align_val_t(8)) char[sizeof(Channel)]),
+        m_channel(reinterpret_cast<Channel*>(m_channel_data.get())) {
+    Future::vtable()->channel(m_channel, m_execlet.raw());
+  }
 
   Future get_return_object() noexcept {
-    return std::move(m_channel.future);
+    return std::move(m_channel->future);
   }
 
   std_coroutine::suspend_never initial_suspend() const noexcept {
@@ -753,7 +758,7 @@ class RustPromiseBase {
         [&](const char* what) {
           const Vtable<Future>* vtable = Future::vtable();
           vtable->sender_send(
-              m_channel.sender,
+              m_channel->sender,
               static_cast<uint32_t>(FuturePollStatus::Error),
               what,
               nullptr);
@@ -796,7 +801,7 @@ class RustStreamPromiseBase<Future, false> : public RustPromiseBase<Future> {
  public:
   RustStreamAwaiter<Future> yield_value(
       typename Future::YieldResult&& value) noexcept {
-    return RustStreamAwaiter(this->m_channel.sender, std::move(value));
+    return RustStreamAwaiter(this->m_channel->sender, std::move(value));
   }
 };
 
@@ -824,7 +829,7 @@ class RustPromise<Future, YieldResultIsVoid, false> final
     RustFutureResult<FinalResult> result;
     new (&result.m_result) FinalResult(std::move(value));
     Future::vtable()->sender_send(
-        this->m_channel.sender,
+        this->m_channel->sender,
         static_cast<uint32_t>(FuturePollStatus::Complete),
         reinterpret_cast<const uint8_t*>(&result),
         nullptr);
@@ -838,7 +843,7 @@ class RustPromise<Future, YieldResultIsVoid, true> final
  public:
   void return_void() {
     Future::vtable()->sender_send(
-        this->m_channel.sender,
+        this->m_channel->sender,
         static_cast<uint32_t>(FuturePollStatus::Complete),
         nullptr,
         nullptr);
@@ -886,7 +891,7 @@ inline bool RustStreamAwaiter<Future>::await_suspend(
     std_coroutine::coroutine_handle<void> next) {
   SuspendedCoroutine* coroutine = new SuspendedCoroutine(
       std::make_unique<CoroutineHandleContinuation>(std::move(next)),
-      [=](SuspendedCoroutine* coroutine) {
+      [this](SuspendedCoroutine* coroutine) {
         return this->poll_next(coroutine);
       });
   return coroutine->initial_suspend();
@@ -919,5 +924,3 @@ inline FutureWakeStatus RustStreamAwaiter<Future>::poll_next(
 
 } // namespace async
 } // namespace rust
-
-#endif // RUST_CXX_ASYNC_H

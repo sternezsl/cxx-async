@@ -9,9 +9,7 @@
 
 // cxx-async/include/rust/cxx_async_folly.h
 
-#ifndef RUST_CXX_ASYNC_FOLLY_H
-#define RUST_CXX_ASYNC_FOLLY_H
-
+#pragma once
 #include <folly/Executor.h>
 #include <folly/Try.h>
 #include <folly/executors/ManualExecutor.h>
@@ -95,5 +93,3 @@ class AwaitTransformer<
 
 } // namespace async
 } // namespace rust
-
-#endif // RUST_CXX_ASYNC_FOLLY_H

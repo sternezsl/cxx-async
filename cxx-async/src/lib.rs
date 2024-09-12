@@ -146,8 +146,8 @@
 
 #![warn(missing_docs)]
 
-#[cfg(built_with_cargo)]
-extern crate link_cplusplus;
+// #[cfg(built_with_cargo)]
+// extern crate link_cplusplus;
 
 use crate::execlet::Execlet;
 use crate::execlet::ExecletReaper;
@@ -220,6 +220,7 @@ macro_rules! safe_debug_assert {
         }
     }};
 }
+
 #[cfg(not(debug_assertions))]
 macro_rules! safe_debug_assert {
     ($cond:expr) => {};
@@ -720,16 +721,16 @@ pub unsafe extern "C" fn sender_future_send<Item>(
     this: &mut CxxAsyncSender<Item>,
     status: u32,
     value: *const u8,
-    waker_data: *const u8,
+    _waker_data: *const u8,
 ) -> u32 {
-    safe_debug_assert!(waker_data.is_null());
+    safe_debug_assert!(_waker_data.is_null());
 
     let this = this.0.as_mut().safe_expect("Where's the SPSC sender?");
     match status {
         FUTURE_STATUS_COMPLETE => {
             // This is a one-shot sender, so sending must always succeed.
-            let sent = this.try_send_value_with(None, || ptr::read(value as *const Item));
-            safe_debug_assert!(sent);
+            let _sent = this.try_send_value_with(None, || ptr::read(value as *const Item));
+            safe_debug_assert!(_sent);
         }
         FUTURE_STATUS_ERROR => this.send_exception(unpack_exception(value)),
         _ => safe_unreachable!(),
