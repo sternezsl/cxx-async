@@ -261,12 +261,6 @@ class RustFuture {
     other.m_data = other.m_vtable = nullptr;
   }
 
-  ~RustFuture() noexcept {
-    if (m_vtable != nullptr) {
-      Derived::vtable()->future_drop(std::move(*static_cast<Derived*>(this)));
-    }
-  }
-
   RustFuture& operator=(RustFuture&& other) noexcept {
     if (m_vtable != nullptr) {
       Derived::vtable()->future_drop(std::move(*static_cast<Derived*>(this)));
@@ -275,6 +269,12 @@ class RustFuture {
     m_vtable = other.m_vtable;
     other.m_data = other.m_vtable = nullptr;
     return *this;
+  }
+
+  ~RustFuture() noexcept {
+    if (m_vtable != nullptr) {
+      Derived::vtable()->future_drop(std::move(*static_cast<Derived*>(this)));
+    }
   }
 
   inline RustAwaiter<Derived> operator co_await() && noexcept {
@@ -295,17 +295,7 @@ struct RustFutureCoroutineTraits {
 
 template <typename Future>
 class RustSender {
- public:
-  ~RustSender() {
-    if (m_ptr == nullptr) {
-      return;
-    }
-    // Passing the wrapped pointer as though it were the sender works because
-    // `CxxAsyncSender` is marked as `#[repr(transparent)]`.
-    Future::vtable()->sender_drop(m_ptr);
-    m_ptr = nullptr;
-  }
-
+public:
   RustSender(RustSender&& other) noexcept : m_ptr(other.m_ptr) {
     other.m_ptr = nullptr;
   }
@@ -324,10 +314,19 @@ class RustSender {
     return *this;
   }
 
+  ~RustSender() {
+    if (m_ptr == nullptr) {
+      return;
+    }
+    // Passing the wrapped pointer as though it were the sender works because
+    // `CxxAsyncSender` is marked as `#[repr(transparent)]`.
+    Future::vtable()->sender_drop(m_ptr);
+    m_ptr = nullptr;
+  }
+
   RustSender() = delete;
   RustSender(const RustSender&) = delete;
   RustSender& operator=(const RustSender&) = delete;
-
  private:
   void* m_ptr{nullptr};
 };
@@ -483,6 +482,11 @@ union RustFutureResult {
 template <>
 union RustFutureResult<void> {
   rust::String m_exception;
+  // When using this type, you must fill `m_exception` manually via placement
+  // new.
+  RustFutureResult() {}
+  // When using this type, you must manually drop the contents.
+  ~RustFutureResult() {}
   void getResult() const {}
 };
 
@@ -492,13 +496,6 @@ class RustFutureReceiver {
 
  public:
   explicit RustFutureReceiver(Future&& future) : m_future(std::move(future)) {}
-
-  RustFutureReceiver(RustFutureReceiver&&) = delete;
-  RustFutureReceiver& operator=(RustFutureReceiver&&) = delete;
-
-  RustFutureReceiver(const RustFutureReceiver&) = delete;
-  RustFutureReceiver& operator=(const RustFutureReceiver&) = delete;
-  ~RustFutureReceiver() = default;
 
   // Consumes the `coroutine` reference (so you probably want to addref it
   // first).
@@ -540,21 +537,13 @@ class RustAwaiter {
       : m_receiver(
             std::make_shared<RustFutureReceiver<Future>>(std::move(future))) {}
 
-  ~RustAwaiter() = default;
-  RustAwaiter(const RustAwaiter&) = delete;
-  RustAwaiter& operator=(const RustAwaiter&) = delete;
-
-  RustAwaiter(RustAwaiter&&) = delete;
-  RustAwaiter& operator=(RustAwaiter&&) = delete;
-
   [[nodiscard]] bool await_ready() const noexcept {
     // We could poll here, but let's not. Assume that polling is more expensive
     // than creating the coroutine state.
     return false;
   }
 
-  [[nodiscard]] bool await_suspend(
-      std_coroutine::coroutine_handle<void> next) const;
+  bool await_suspend(std_coroutine::coroutine_handle<void> next);
 
   YieldResult await_resume() {
     return m_receiver->get_result();
@@ -573,19 +562,10 @@ class RustStreamAwaiter {
   RustStreamAwaiter(RustSender<Future>& sender, YieldResult&& value)
       : m_sender(sender), m_value(std::move(value)) {}
 
-  ~RustStreamAwaiter() = default;
-
-  RustStreamAwaiter(RustStreamAwaiter&&) = delete;
-  RustStreamAwaiter& operator=(RustStreamAwaiter&&) = delete;
-
-  RustStreamAwaiter(const RustStreamAwaiter&) = delete;
-  RustStreamAwaiter& operator=(const RustStreamAwaiter&) = delete;
-
   [[nodiscard]] bool await_ready() const noexcept {
     return false;
   }
-  [[nodiscard]] bool await_suspend(
-      std_coroutine::coroutine_handle<void> next) const;
+  bool await_suspend(std_coroutine::coroutine_handle<void> next);
   void await_resume() const {}
 
  private:
@@ -719,12 +699,6 @@ class RustPromiseBase {
         m_channel(reinterpret_cast<Channel*>(m_channel_data.get())) {
     Future::vtable()->channel(m_channel, m_execlet.raw());
   }
-
-  ~RustPromiseBase() = default;
-  RustPromiseBase(RustPromiseBase&&) = delete;
-  RustPromiseBase& operator=(RustPromiseBase&&) = delete;
-  RustPromiseBase(const RustPromiseBase&) = delete;
-  RustPromiseBase& operator=(const RustPromiseBase&) = delete;
 
   Future get_return_object() noexcept {
     return std::move(m_channel->future);
@@ -866,14 +840,12 @@ FutureWakeStatus RustFutureReceiver<Future>::wake(
 
 template <typename Future>
 inline bool RustAwaiter<Future>::await_suspend(
-    std_coroutine::coroutine_handle<void> next) const {
+    std_coroutine::coroutine_handle<void> next) {
   std::weak_ptr<RustFutureReceiver<Future>> weak_receiver = m_receiver;
   auto* coroutine = new SuspendedCoroutine(
       std::make_unique<CoroutineHandleContinuation>(next),
-      [wreceiver =
-           std::move(weak_receiver)](SuspendedCoroutine* coro) {
-        std::shared_ptr<RustFutureReceiver<Future>> receiver =
-            wreceiver.lock();
+      [wreceiver = std::move(weak_receiver)](SuspendedCoroutine* coro) {
+        std::shared_ptr<RustFutureReceiver<Future>> receiver = wreceiver.lock();
         // This rarely ever happens in practice, but I think it can.
         if (!receiver) {
           return FutureWakeStatus::Dead;
@@ -885,12 +857,10 @@ inline bool RustAwaiter<Future>::await_suspend(
 
 template <typename Future>
 inline bool RustStreamAwaiter<Future>::await_suspend(
-    std_coroutine::coroutine_handle<void> next) const {
+    std_coroutine::coroutine_handle<void> next) {
   auto* coroutine = new SuspendedCoroutine(
       std::make_unique<CoroutineHandleContinuation>(next),
-      [this](SuspendedCoroutine* coro) {
-        return this->poll_next(coro);
-      });
+      [this](SuspendedCoroutine* coro) { return this->poll_next(coro); });
   return coroutine->initial_suspend();
 }
 

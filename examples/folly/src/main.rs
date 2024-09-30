@@ -7,8 +7,9 @@ use async_recursion::async_recursion;
 use cxx_async::CxxAsyncException;
 use futures::executor::{self, ThreadPool};
 use futures::task::SpawnExt;
-use futures::{StreamExt, TryStreamExt};
-use futures::{Stream, join};
+#[cfg(test)]
+use futures::TryStreamExt;
+use futures::{join, Stream, StreamExt};
 use once_cell::sync::Lazy;
 use std::future::Future;
 use std::ops::Range;
@@ -174,7 +175,9 @@ fn test_rust_calling_cpp_synchronously_futures() {
         75719554055754070000000.0
     );
     assert_eq!(
-        executor::block_on(ffi::folly_get_namespaced_string()).unwrap().namespaced_string,
+        executor::block_on(ffi::folly_get_namespaced_string())
+            .unwrap()
+            .namespaced_string,
         "hello world"
     );
 }
